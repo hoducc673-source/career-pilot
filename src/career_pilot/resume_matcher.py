@@ -279,6 +279,47 @@ def _normalize_requirement_statuses(raw: Dict[str, object]) -> None:
             item["status"] = REQUIREMENT_STATUS_ALIASES[status]
 
 
+def _neutralize_proficiency_words(text: str) -> str:
+    neutral = re.sub(r"熟练(?:使用|掌握)?|精通|掌握|擅长", "涉及", text)
+    return neutral.replace("能力较强", "有相关证据")
+
+
+def _normalize_strength_claims(
+    raw: Dict[str, object], resume_payload: Dict[str, object]
+) -> None:
+    """Rewrite unsupported intensity claims as neutral, referenced resume facts."""
+    evidence = resume_payload.get("evidence", [])
+    if not isinstance(evidence, list):
+        return
+    evidence_by_ref = {
+        f"resume.{item['evidence_id']}": str(item.get("text", "")).strip()
+        for item in evidence
+        if isinstance(item, dict)
+        and isinstance(item.get("evidence_id"), str)
+        and str(item.get("text", "")).strip()
+    }
+    strengths = raw.get("strengths")
+    if not isinstance(strengths, list):
+        return
+    for item in strengths:
+        if not isinstance(item, dict) or not UNSUPPORTED_PROFICIENCY.search(
+            str(item.get("claim", ""))
+        ):
+            continue
+        refs = item.get("evidence_refs", [])
+        if not isinstance(refs, list):
+            continue
+        snippet = next(
+            (evidence_by_ref[ref] for ref in refs if ref in evidence_by_ref), None
+        )
+        if snippet is None:
+            continue
+        snippet = _neutralize_proficiency_words(snippet)
+        if len(snippet) > 72:
+            snippet = snippet[:71].rstrip() + "…"
+        item["claim"] = f"简历提供相关事实证据：{snippet}"
+
+
 def build_match_prompt(
     profile: CareerProfile, job: Dict[str, object], resume_payload: Dict[str, object]
 ) -> str:
@@ -500,6 +541,7 @@ def match_with_model(
         # Hard gates are objective program output, not a language-model classification task.
         raw["hard_requirements"] = deepcopy(validated_hard_requirements)
         _normalize_requirement_statuses(raw)
+        _normalize_strength_claims(raw, resume_payload)
         if any(item["status"] == "not_met" for item in validated_hard_requirements):
             raw["decision"] = "not_eligible_now"
         try:

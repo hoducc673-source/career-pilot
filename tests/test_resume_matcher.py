@@ -224,6 +224,15 @@ class ResumeMatcherTests(unittest.TestCase):
         actual = match_with_model(profile, job, resume, FakeClient(result))
         self.assertEqual(actual["requirement_matches"][0]["status"], "matched")
 
+    def test_model_proficiency_claim_is_rewritten_from_resume_evidence(self):
+        profile, job, resume, result = fixtures()
+        result["strengths"][0]["claim"] = "熟练使用模型评测工具。"
+        actual = match_with_model(profile, job, resume, FakeClient(result))
+        self.assertEqual(
+            actual["strengths"][0]["claim"],
+            "简历提供相关事实证据：参与模型输出评测",
+        )
+
     def test_rejects_location_as_a_hard_gate(self):
         profile, job, resume, result = fixtures()
         result["hard_requirements"][0] = {
