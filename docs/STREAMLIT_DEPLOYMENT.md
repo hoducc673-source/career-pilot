@@ -18,6 +18,8 @@
 DEEPSEEK_API_KEY = "在平台中填写真实 Key，不要写入 GitHub"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-pro"
+PUBLIC_SESSION_API_LIMIT = "3"
+PUBLIC_DAILY_API_LIMIT = "12"
 ```
 
 不要上传本地 `.env`，不要创建并提交真实的 `.streamlit/secrets.toml`。这两个路径都已被 Git 忽略。
@@ -41,4 +43,4 @@ DEEPSEEK_MODEL = "deepseek-v4-pro"
 
 ## 5. 费用保护
 
-公开演示会使用部署者账户中的 DeepSeek 余额。上线初期应设置较低的平台余额或告警，定期检查用量；如果出现异常调用，先从 Streamlit Secrets 中移除 `DEEPSEEK_API_KEY`，应用会自动退回离线模式。
+公开演示默认限制每个浏览器会话 3 次、单个服务进程每日 12 次 DeepSeek 请求；模型自动修复重试也会计数。该计数会在服务重启后重置，不能代替 DeepSeek 账户侧的余额或告警。应定期检查用量；如果出现异常调用，先从 Streamlit Secrets 中移除 `DEEPSEEK_API_KEY`，应用会自动退回离线模式。

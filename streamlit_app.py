@@ -22,6 +22,7 @@ from career_pilot.report_renderer import (
     render_match_report,
 )
 from career_pilot.resume_matcher import match_with_model
+from career_pilot.usage_guard import DailyUsageGuard, UsageLimitError
 from career_pilot.web_support import build_profile, load_starting_profile, parse_uploaded_resume
 
 
@@ -42,6 +43,9 @@ RAG_LABELS = {
     "work": "工作经验",
 }
 RAG_VALUES = {label: value for value, label in RAG_LABELS.items()}
+DEFAULT_SESSION_API_LIMIT = 3
+DEFAULT_DAILY_API_LIMIT = 12
+SESSION_USAGE_KEY = "deepseek_requests_used"
 
 
 def inject_theme() -> None:
@@ -158,7 +162,13 @@ def model_is_configured() -> bool:
     except ValueError:
         return False
     try:
-        for key in ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL"):
+        for key in (
+            "DEEPSEEK_API_KEY",
+            "DEEPSEEK_BASE_URL",
+            "DEEPSEEK_MODEL",
+            "PUBLIC_SESSION_API_LIMIT",
+            "PUBLIC_DAILY_API_LIMIT",
+        ):
             if key in st.secrets and not os.environ.get(key):
                 os.environ[key] = str(st.secrets[key])
     except StreamlitSecretNotFoundError:
@@ -166,8 +176,57 @@ def model_is_configured() -> bool:
     return bool(os.environ.get("DEEPSEEK_API_KEY", "").strip())
 
 
-def get_client() -> DeepSeekClient:
-    return DeepSeekClient(DeepSeekSettings.from_env())
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 1 else default
+
+
+def session_api_limit() -> int:
+    model_is_configured()
+    return _positive_env_int("PUBLIC_SESSION_API_LIMIT", DEFAULT_SESSION_API_LIMIT)
+
+
+def daily_api_limit() -> int:
+    model_is_configured()
+    return _positive_env_int("PUBLIC_DAILY_API_LIMIT", DEFAULT_DAILY_API_LIMIT)
+
+
+@st.cache_resource
+def get_daily_usage_guard(limit: int) -> DailyUsageGuard:
+    return DailyUsageGuard(limit)
+
+
+def reserve_model_request() -> None:
+    session_limit = session_api_limit()
+    session_used = int(st.session_state.get(SESSION_USAGE_KEY, 0))
+    if session_used >= session_limit:
+        raise UsageLimitError(
+            f"本次浏览器会话的 {session_limit} 次 DeepSeek 请求已用完；"
+            "离线方向探索、岗位雷达和本地检索仍可继续使用。"
+        )
+    reservation = get_daily_usage_guard(daily_api_limit()).reserve()
+    if not reservation.allowed:
+        raise UsageLimitError(
+            "公开演示今天的 DeepSeek 总额度已用完；请明天再试，离线功能不受影响。"
+        )
+    st.session_state[SESSION_USAGE_KEY] = session_used + 1
+
+
+class GuardedDeepSeekClient:
+    def __init__(self, delegate: DeepSeekClient):
+        self.delegate = delegate
+
+    def generate_json(self, system_prompt: str, user_prompt: str) -> Dict[str, object]:
+        reserve_model_request()
+        return self.delegate.generate_json(system_prompt, user_prompt)
+
+
+def get_client() -> GuardedDeepSeekClient:
+    return GuardedDeepSeekClient(DeepSeekClient(DeepSeekSettings.from_env()))
 
 
 def profile_controls(starting: CareerProfile, source_label: str) -> CareerProfile:
@@ -206,6 +265,12 @@ def profile_controls(starting: CareerProfile, source_label: str) -> CareerProfil
         st.divider()
         st.caption("模型固定使用 DeepSeek V4 Pro；只有点击生成按钮才会产生 API 请求。")
         st.success("DeepSeek 已配置" if model_is_configured() else "当前仅可使用离线功能")
+        session_limit = session_api_limit()
+        session_used = int(st.session_state.get(SESSION_USAGE_KEY, 0))
+        st.caption(
+            f"费用保护：本会话剩余 {max(0, session_limit - session_used)} 次模型请求；"
+            f"服务器每日总上限 {daily_api_limit()} 次。"
+        )
         st.markdown(f"[查看项目源码]({REPO_URL})")
 
     return build_profile(
@@ -344,6 +409,8 @@ def render_match_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> N
             st.session_state["latest_match_report"] = report
             st.session_state["latest_match_summary"] = match
             st.session_state["latest_match_job_id"] = str(job["id"])
+        except UsageLimitError as error:
+            st.warning(str(error))
         except DeepSeekError as error:
             st.error("DeepSeek 服务调用失败，请检查网络、API Key 或账户余额后重试。")
             with st.expander("查看技术详情"):
@@ -399,6 +466,8 @@ def render_rag_tab() -> None:
                 else:
                     with st.spinner("正在依据检索原文生成带引用答案……"):
                         st.session_state["rag_answer"] = answer_with_model(question, results, get_client())
+        except UsageLimitError as error:
+            st.warning(str(error))
         except (OSError, UnicodeError, ValueError, DeepSeekError) as error:
             st.error(f"问答失败：{error}")
 
