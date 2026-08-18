@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from html import escape
 from pathlib import Path
 from typing import Dict, List
 
@@ -8,9 +9,9 @@ import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
 from career_pilot.config import load_env_file
+from career_pilot.custom_jd import MAX_JD_CHARS, parse_custom_jd
 from career_pilot.deepseek_client import DeepSeekClient, DeepSeekError, DeepSeekSettings
 from career_pilot.engine import explore
-from career_pilot.jd_analyzer import demo_analysis
 from career_pilot.job_catalog import load_catalog
 from career_pilot.models import CareerProfile, DIMENSION_LABELS
 from career_pilot.rag_answerer import answer_with_model
@@ -21,7 +22,7 @@ from career_pilot.report_renderer import (
     HARD_STATUS_LABELS,
     render_match_report,
 )
-from career_pilot.resume_matcher import match_with_model
+from career_pilot.resume_matcher import build_validated_hard_requirements, match_with_model
 from career_pilot.usage_guard import DailyUsageGuard, UsageLimitError
 from career_pilot.web_support import build_profile, load_starting_profile, parse_uploaded_resume
 
@@ -34,6 +35,7 @@ ROLE_LABELS = {
     "data_analysis": "数据分析",
     "product": "产品",
     "operations": "运营",
+    "other": "综合 / 其他",
 }
 RAG_LABELS = {
     "unknown": "待确认",
@@ -126,6 +128,18 @@ def inject_theme() -> None:
           border-left: 2px solid var(--sea); padding: .35rem .8rem; margin: .65rem 0;
           color: var(--muted); font-size: .9rem;
         }
+        .cp-jd-intake {
+          display: grid; grid-template-columns: 1.3fr 1fr 1fr;
+          border: 1px solid var(--line); background: rgba(255,255,255,.82);
+          margin: .7rem 0 1rem;
+        }
+        .cp-jd-intake > div { padding: .82rem 1rem; border-right: 1px solid var(--line); }
+        .cp-jd-intake > div:last-child { border-right: 0; }
+        .cp-jd-intake strong {
+          display: block; color: var(--ink); font-family: "Avenir Next", Avenir, sans-serif;
+          font-size: .78rem; letter-spacing: .06em;
+        }
+        .cp-jd-intake span { color: var(--muted); font-size: .84rem; }
         div[data-testid="stMetric"] {
           background: rgba(255,255,255,.84); border: 1px solid var(--line); padding: .75rem;
         }
@@ -138,6 +152,9 @@ def inject_theme() -> None:
           .cp-route-step:nth-child(2) { border-right: 0; }
           .cp-route-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
           .cp-title { letter-spacing: -.04em; }
+          .cp-jd-intake { grid-template-columns: 1fr; }
+          .cp-jd-intake > div { border-right: 0; border-bottom: 1px solid var(--line); }
+          .cp-jd-intake > div:last-child { border-bottom: 0; }
         }
         @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
         </style>
@@ -331,8 +348,145 @@ def render_direction_tab(profile: CareerProfile) -> None:
                     st.write(f"- {item}")
 
 
+def jobs_available_for_matching(jobs: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    custom = st.session_state.get("custom_job")
+    if isinstance(custom, dict):
+        return [custom, *jobs]
+    return jobs
+
+
+def render_job_evidence(profile: CareerProfile, job: Dict[str, object]) -> None:
+    hard_requirements = build_validated_hard_requirements(profile, job, {"evidence": []})
+    has_failed_gate = any(item["status"] == "not_met" for item in hard_requirements)
+    decision = "not_eligible_now" if has_failed_gate else str(job["preliminary_fit"])
+    source_status = "本次会话" if job["source_status"] == "session_only" else "已记录"
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("离线初筛", DECISION_LABELS.get(decision, decision))
+    col2.metric("岗位族", ROLE_LABELS.get(str(job["role_family"]), str(job["role_family"])))
+    col3.metric("来源状态", source_status)
+
+    st.markdown("**职责**")
+    for responsibility in job["responsibilities"]:
+        st.write(f"- {responsibility}")
+    st.markdown("**岗位要求**")
+    for requirement in job["requirements"]:
+        st.write(f"- {requirement}")
+
+    st.markdown("**可验证硬门槛**")
+    if not hard_requirements:
+        st.info("未识别到学历、毕业时间、到岗时间或强制证书类硬门槛。")
+    for item in hard_requirements:
+        status = HARD_STATUS_LABELS.get(str(item["status"]), str(item["status"]))
+        requirement = escape(str(item["requirement"]))
+        refs = "、".join(escape(str(ref)) for ref in item["evidence_refs"])
+        st.markdown(
+            f'<div class="cp-card sea"><span class="cp-badge">{escape(status)}</span>'
+            f'<span class="cp-card-title">{requirement}</span>'
+            f'<div class="cp-card-copy">证据：{refs}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    source_url = str(job.get("source_url", ""))
+    if source_url.startswith(("https://", "http://")):
+        st.link_button("打开岗位来源", source_url)
+
+
+def render_custom_jd_intake(profile: CareerProfile) -> None:
+    st.markdown(
+        """
+        <div class="cp-jd-intake" aria-label="JD 本地解析说明">
+          <div><strong>PASTE / 粘贴</strong><span>复制完整职责与要求</span></div>
+          <div><strong>LOCAL / 本地</strong><span>解析不调用模型</span></div>
+          <div><strong>SESSION / 会话</strong><span>关闭页面后不保留</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    jd_text = st.text_area(
+        "粘贴招聘 JD",
+        height=280,
+        max_chars=MAX_JD_CHARS,
+        placeholder=(
+            "公司：……\n岗位：……\n工作地点：……\n\n"
+            "岗位职责：\n1. ……\n\n任职要求：\n1. ……"
+        ),
+        key="custom_jd_text",
+    )
+    with st.expander("补充识别信息（可选）"):
+        company = st.text_input("公司名称", key="custom_jd_company")
+        title = st.text_input("岗位名称", key="custom_jd_title")
+        city = st.text_input("工作城市", placeholder="例如：上海，北京", key="custom_jd_city")
+        source_url = st.text_input("原始链接", placeholder="https://...", key="custom_jd_url")
+
+    left, right = st.columns([3, 1])
+    with left:
+        parse_clicked = st.button(
+            "本地解析这份 JD",
+            type="primary",
+            use_container_width=True,
+            disabled=not jd_text.strip(),
+        )
+    with right:
+        clear_clicked = st.button(
+            "移除本次 JD",
+            use_container_width=True,
+            disabled="custom_job" not in st.session_state,
+        )
+
+    if clear_clicked:
+        st.session_state.pop("custom_job", None)
+        st.session_state.pop("custom_job_warnings", None)
+        if str(st.session_state.get("match_job", "")).startswith("本次 JD｜"):
+            st.session_state.pop("match_job", None)
+        st.rerun()
+    if parse_clicked:
+        try:
+            parsed = parse_custom_jd(
+                jd_text,
+                company=company,
+                title=title,
+                city=city,
+                source_url=source_url,
+            )
+            st.session_state["custom_job"] = parsed.job
+            st.session_state["custom_job_warnings"] = parsed.warnings
+            st.session_state["match_job"] = (
+                f"本次 JD｜{parsed.job['company']}｜{parsed.job['title']}｜"
+                f"{'、'.join(parsed.job['cities'])}"
+            )
+            st.rerun()
+        except ValueError as error:
+            st.error(f"JD 解析失败：{error}")
+
+    job = st.session_state.get("custom_job")
+    if not isinstance(job, dict):
+        st.caption("解析后，这份 JD 会自动加入“简历匹配”的目标岗位列表。")
+        return
+
+    for warning in st.session_state.get("custom_job_warnings", []):
+        st.warning(str(warning))
+    st.success(
+        f"已本地提取 {len(job['responsibilities'])} 条职责、"
+        f"{len(job['requirements'])} 条要求，并加入简历匹配。"
+    )
+    st.markdown(f"### {job['company']} · {job['title']}")
+    st.caption(f"工作地点：{'、'.join(job['cities'])}｜仅保留在本次网页会话")
+    render_job_evidence(profile, job)
+
+
 def render_job_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> None:
     st.subheader("岗位雷达")
+    source_mode = st.radio(
+        "岗位来源",
+        ["精选岗位库", "粘贴新 JD"],
+        horizontal=True,
+        key="job_source_mode",
+    )
+    if source_mode == "粘贴新 JD":
+        render_custom_jd_intake(profile)
+        return
+
     left, right = st.columns([1, 1])
     with left:
         family_label = st.selectbox("岗位方向", ["全部", "数据分析", "产品", "运营"])
@@ -352,39 +506,22 @@ def render_job_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> Non
 
     labels = {f"{job['company']}｜{job['title']}｜{'、'.join(job['cities'])}": job for job in filtered}
     selected_label = st.selectbox("选择岗位", list(labels))
-    job = labels[selected_label]
-    analysis = demo_analysis(profile, job)
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("离线初筛", DECISION_LABELS.get(str(analysis["decision"]), str(analysis["decision"])))
-    col2.metric("岗位族", ROLE_LABELS.get(str(job["role_family"]), str(job["role_family"])))
-    col3.metric("来源状态", "已记录" if job["source_status"] == "page_available" else str(job["source_status"]))
-
-    st.markdown(f"**职责**　{'　/　'.join(job['responsibilities'])}")
-    st.markdown("**岗位要求**")
-    for requirement in job["requirements"]:
-        st.write(f"- {requirement}")
-
-    st.markdown("**硬门槛基线**")
-    for item in analysis["hard_requirements"]:
-        status = HARD_STATUS_LABELS.get(str(item["status"]), str(item["status"]))
-        st.markdown(
-            f'<div class="cp-card sea"><span class="cp-badge">{status}</span>'
-            f'<span class="cp-card-title">{item["requirement"]}</span>'
-            f'<div class="cp-card-copy">证据：{"、".join(item["evidence_refs"])}</div></div>',
-            unsafe_allow_html=True,
-        )
-    st.link_button("打开岗位来源", str(job["source_url"]))
+    render_job_evidence(profile, labels[selected_label])
 
 
 def render_match_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> None:
     st.subheader("简历 × 岗位证据匹配")
     st.markdown(
         '<div class="cp-privacy"><strong>隐私检查点</strong>　文件只在临时目录解析，不写入项目；'
-        '但点击“生成匹配报告”后，提取出的脱敏文本会发送给 DeepSeek。</div>',
+        '但点击“生成匹配报告”后，脱敏简历文本和选中的 JD 会发送给 DeepSeek。</div>',
         unsafe_allow_html=True,
     )
-    labels = {f"{job['company']}｜{job['title']}｜{'、'.join(job['cities'])}": job for job in jobs}
+    available_jobs = jobs_available_for_matching(jobs)
+    labels = {
+        f"{'本次 JD｜' if job['source_status'] == 'session_only' else ''}"
+        f"{job['company']}｜{job['title']}｜{'、'.join(job['cities'])}": job
+        for job in available_jobs
+    }
     selected = st.selectbox("目标岗位", list(labels), key="match_job")
     job = labels[selected]
     uploaded = st.file_uploader("上传脱敏 DOCX 简历（不超过 5 MB）", type=["docx"])
@@ -399,7 +536,7 @@ def render_match_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> N
         except (OSError, ValueError) as error:
             st.error(f"简历解析失败：{error}")
 
-    consent = st.checkbox("我确认这是脱敏简历，并同意将上述文本发送给 DeepSeek 生成报告。")
+    consent = st.checkbox("我确认这是脱敏简历，并同意将脱敏文本与选中 JD 发送给 DeepSeek 生成报告。")
     can_run = resume_payload is not None and consent and model_is_configured()
     if st.button("生成匹配报告", type="primary", disabled=not can_run, use_container_width=True):
         try:
