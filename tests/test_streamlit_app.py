@@ -13,7 +13,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(list(app.exception), [])
         self.assertEqual(
             [tab.label for tab in app.tabs],
-            ["方向探索", "岗位雷达", "简历匹配", "投递看板", "知识问答"],
+            ["方向探索", "岗位雷达", "简历匹配", "投递看板", "面试准备", "知识问答"],
         )
         self.assertIn(
             "费用保护：本会话剩余 3 次模型请求；服务器每日总上限 12 次。",
@@ -60,6 +60,15 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(list(app.exception), [])
         self.assertTrue(any("已将岗位加入收藏阶段" in item.value for item in app.success))
         self.assertTrue(any(item.label.startswith("收藏 ｜ 中瑞集团") for item in app.expander))
+
+    def test_interview_prep_requires_resume_and_consent(self):
+        app_path = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+        app = AppTest.from_file(str(app_path), default_timeout=10).run()
+
+        target = next(item for item in app.selectbox if item.label == "目标面试岗位")
+        generate = next(item for item in app.button if item.label == "生成面试题包")
+        self.assertIn("中瑞集团｜产品运营｜青岛", target.options)
+        self.assertTrue(generate.disabled)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from career_pilot.config import load_env_file
 from career_pilot.custom_jd import MAX_JD_CHARS, parse_custom_jd
 from career_pilot.deepseek_client import DeepSeekClient, DeepSeekError, DeepSeekSettings
 from career_pilot.engine import explore
+from career_pilot.interview_prep import generate_interview_prep, render_interview_prep_markdown
 from career_pilot.job_catalog import load_catalog
 from career_pilot.models import CareerProfile, DIMENSION_LABELS
 from career_pilot.rag_answerer import answer_with_model
@@ -173,6 +174,22 @@ def inject_theme() -> None:
           border-left: 4px solid var(--signal); background: #FFF3EE;
           color: #7A321C; padding: .7rem .9rem; margin: .55rem 0;
         }
+        .cp-answer-runway {
+          display: grid; grid-template-columns: repeat(4, 1fr);
+          border: 1px solid var(--line); background: rgba(255,255,255,.84);
+          margin: .7rem 0 1rem;
+        }
+        .cp-answer-step { padding: .8rem 1rem; border-right: 1px solid var(--line); }
+        .cp-answer-step:last-child { border-right: 0; }
+        .cp-answer-key {
+          color: var(--signal); font-family: "Avenir Next", Avenir, sans-serif;
+          font-size: .7rem; font-weight: 700; letter-spacing: .08em;
+        }
+        .cp-answer-value { color: var(--ink); font-weight: 650; margin-top: .26rem; }
+        .cp-boundary {
+          background: #FFF3EE; border-left: 4px solid var(--signal);
+          color: #71331F; padding: .7rem .85rem; margin-top: .7rem;
+        }
         div[data-testid="stMetric"] {
           background: rgba(255,255,255,.84); border: 1px solid var(--line); padding: .75rem;
         }
@@ -191,6 +208,9 @@ def inject_theme() -> None:
           .cp-pipeline { grid-template-columns: 1fr 1fr; }
           .cp-pipeline-step { border-bottom: 1px solid var(--line); }
           .cp-pipeline-step::after { display: none; }
+          .cp-answer-runway { grid-template-columns: 1fr 1fr; }
+          .cp-answer-step:nth-child(2) { border-right: 0; }
+          .cp-answer-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
         }
         @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
         </style>
@@ -837,6 +857,147 @@ def render_tracker_tab(jobs: List[Dict[str, object]]) -> None:
                 st.rerun()
 
 
+def render_interview_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> None:
+    st.subheader("面试准备中心")
+    st.markdown(
+        """
+        <div class="cp-answer-runway" aria-label="面试回答训练路径">
+          <div class="cp-answer-step"><div class="cp-answer-key">QUESTION</div><div class="cp-answer-value">理解问法</div></div>
+          <div class="cp-answer-step"><div class="cp-answer-key">EVIDENCE</div><div class="cp-answer-value">定位真实经历</div></div>
+          <div class="cp-answer-step"><div class="cp-answer-key">STRUCTURE</div><div class="cp-answer-value">组织回答</div></div>
+          <div class="cp-answer-step"><div class="cp-answer-key">BOUNDARY</div><div class="cp-answer-value">守住诚信边界</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="cp-privacy"><strong>隐私检查点</strong>　简历先在本地脱敏解析；'
+        '只有勾选确认并点击“生成面试题包”后，脱敏证据和选中 JD 才会发送给 DeepSeek。</div>',
+        unsafe_allow_html=True,
+    )
+
+    available_jobs = jobs_available_for_matching(jobs)
+    labels = {
+        f"{'本次 JD｜' if job['source_status'] == 'session_only' else ''}"
+        f"{job['company']}｜{job['title']}｜{'、'.join(job['cities'])}": job
+        for job in available_jobs
+    }
+    selected = st.selectbox("目标面试岗位", list(labels), key="interview_job")
+    job = labels[selected]
+    uploaded = st.file_uploader(
+        "上传脱敏 DOCX 简历（不超过 5 MB）",
+        type=["docx"],
+        key="interview_resume",
+    )
+    resume_payload = None
+    if uploaded is not None:
+        try:
+            resume_payload = parse_uploaded_resume(uploaded.getvalue())
+            st.success(f"本地解析完成：提取 {resume_payload['evidence_count']} 条证据，文件未持久化保存。")
+            with st.expander("预览将发送的脱敏证据"):
+                for item in resume_payload["evidence"]:
+                    st.write(f"`resume.{item['evidence_id']}`　{item['text']}")
+        except (OSError, ValueError) as error:
+            st.error(f"简历解析失败：{error}")
+
+    consent = st.checkbox(
+        "我确认这是脱敏简历，并同意将脱敏证据与选中 JD 发送给 DeepSeek 生成面试题包。",
+        key="interview_consent",
+    )
+    st.caption("题包需要 1 次模型请求；如果输出未通过证据校验，最多会自动修复 2 次，每次均计入额度。")
+    can_run = resume_payload is not None and consent and model_is_configured()
+    if st.button(
+        "生成面试题包",
+        type="primary",
+        disabled=not can_run,
+        use_container_width=True,
+        key="interview_generate",
+    ):
+        try:
+            with st.spinner("正在把 JD 要求与简历证据转成面试训练路径……"):
+                prep = generate_interview_prep(profile, job, resume_payload, get_client())
+                report = render_interview_prep_markdown(prep, profile, job, resume_payload)
+            st.session_state["latest_interview_prep"] = prep
+            st.session_state["latest_interview_report"] = report
+            st.session_state["latest_interview_job_id"] = str(job["id"])
+            st.rerun()
+        except UsageLimitError as error:
+            st.warning(str(error))
+        except DeepSeekError as error:
+            st.error("DeepSeek 服务调用失败，请检查网络、API Key 或账户余额后重试。")
+            with st.expander("查看技术详情"):
+                st.code(str(error))
+        except ValueError as error:
+            st.error("模型已经响应，但题包未通过证据校验；本次不展示不可靠内容。")
+            with st.expander("查看技术详情"):
+                st.code(str(error))
+
+    if not model_is_configured():
+        st.info("尚未配置 DeepSeek API Key，面试题包需要启用模型后才能生成。")
+    elif uploaded is None:
+        st.caption("上传脱敏简历后才能根据真实证据定制问题。")
+    elif not consent:
+        st.caption("勾选隐私确认后才能调用模型。")
+
+    prep = st.session_state.get("latest_interview_prep")
+    report = st.session_state.get("latest_interview_report")
+    result_matches_job = st.session_state.get("latest_interview_job_id") == str(job["id"])
+    if not isinstance(prep, dict) or not report or not result_matches_job:
+        return
+
+    st.divider()
+    metric_columns = st.columns(3)
+    metric_columns[0].metric("准备重点", len(prep["focus_areas"]))
+    metric_columns[1].metric("岗位问题", len(prep["questions"]))
+    metric_columns[2].metric("面试前任务", len(prep["preparation_checklist"]))
+    st.markdown(str(prep["opening"]))
+
+    st.markdown("#### 准备重点")
+    focus_columns = st.columns(len(prep["focus_areas"]))
+    for column, item in zip(focus_columns, prep["focus_areas"]):
+        with column:
+            st.markdown(
+                f'<div class="cp-card sea"><div class="cp-card-title">{escape(str(item["label"]))}</div>'
+                f'<div class="cp-card-copy">{escape(str(item["rationale"]))}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown("#### 岗位专属问题")
+    for item in prep["questions"]:
+        with st.container(border=True):
+            st.markdown(f"### {item['id']} · {item['question']}")
+            st.caption(f"为什么会问：{item['why_it_matters']}")
+            st.markdown("**回答结构（用自己的真实事实填充）**")
+            for index, step in enumerate(item["answer_structure"], start=1):
+                st.write(f"{index}. {step}")
+            refs = "、".join(f"`{ref}`" for ref in item["evidence_refs"])
+            st.markdown(f"**可用证据：**{refs}")
+            st.markdown(
+                f'<div class="cp-boundary"><strong>诚信边界</strong>　'
+                f'{escape(str(item["honesty_boundary"]))}</div>',
+                unsafe_allow_html=True,
+            )
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown("#### 反问面试官")
+        for index, item in enumerate(prep["questions_to_ask"], start=1):
+            st.markdown(f"{index}. **{item['question']}**")
+            st.caption(str(item["rationale"]))
+    with right:
+        st.markdown("#### 面试前清单")
+        for item in prep["preparation_checklist"]:
+            st.markdown(f"- [ ] {item['item']}")
+
+    st.download_button(
+        "下载 Markdown 面试题包",
+        str(report),
+        file_name="careerpilot-interview-prep.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
+
+
 def render_rag_tab() -> None:
     st.subheader("知识库问答")
     st.caption("系统先检索公开项目文档，再让模型只依据命中原文回答。")
@@ -900,8 +1061,8 @@ def main() -> None:
         st.stop()
 
     render_hero()
-    direction_tab, job_tab, match_tab, tracker_tab, rag_tab = st.tabs(
-        ["方向探索", "岗位雷达", "简历匹配", "投递看板", "知识问答"]
+    direction_tab, job_tab, match_tab, tracker_tab, interview_tab, rag_tab = st.tabs(
+        ["方向探索", "岗位雷达", "简历匹配", "投递看板", "面试准备", "知识问答"]
     )
     with direction_tab:
         render_direction_tab(profile)
@@ -911,6 +1072,8 @@ def main() -> None:
         render_match_tab(profile, jobs)
     with tracker_tab:
         render_tracker_tab(jobs)
+    with interview_tab:
+        render_interview_tab(profile, jobs)
     with rag_tab:
         render_rag_tab()
 
