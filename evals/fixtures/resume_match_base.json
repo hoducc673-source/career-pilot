@@ -1,0 +1,43 @@
+{
+  "job_id": "xiaohongshu-beijing-shanghai-ai-pm-intern",
+  "decision": "stretch",
+  "confidence": "medium",
+  "summary": "候选人提供了模型评测证据，但尚无RAG和PRD证据，属于需要补强的匹配。",
+  "hard_requirements": [
+    {
+      "requirement": "本科及以上在读",
+      "status": "met",
+      "evidence_refs": ["profile.education_level", "job.requirements[0]"]
+    }
+  ],
+  "requirement_matches": [
+    {
+      "requirement": "设计评测并分析Bad Case",
+      "status": "matched",
+      "rationale": "简历提供了模型输出评测和问题整理证据。",
+      "evidence_refs": ["resume.R001", "job.responsibilities[3]"]
+    }
+  ],
+  "strengths": [
+    {
+      "claim": "有模型输出评测和问题归类经历。",
+      "evidence_refs": ["resume.R001", "job.responsibilities[3]"]
+    }
+  ],
+  "gaps": [
+    {
+      "gap": "当前没有RAG经历，无法提供相关项目证据。",
+      "evidence_refs": ["profile.rag_experience", "job.requirements[2]"],
+      "action": "先完成最小RAG学习项目，再决定是否加入作品集。"
+    }
+  ],
+  "resume_edits": [
+    {
+      "target": "模型评测经历",
+      "current_evidence_refs": ["resume.R001"],
+      "suggestion": "把评测规则、复核动作和问题归类写得更具体，不增加未经记录的数字。"
+    }
+  ],
+  "interview_questions": ["你如何复核模型输出并归类问题？"],
+  "next_actions": ["完成一份简版PRD。"]
+}

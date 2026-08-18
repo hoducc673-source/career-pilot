@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "source_file": "synthetic-sanitized-resume.docx",
+  "privacy_status": "sanitized",
+  "evidence_count": 2,
+  "evidence": [
+    {
+      "evidence_id": "R001",
+      "text": "参与模型输出评测，依据规则复核结果并整理问题类型。",
+      "kind": "resume_text"
+    },
+    {
+      "evidence_id": "R002",
+      "text": "技能清单：Python、SQL。",
+      "kind": "resume_text"
+    }
+  ]
+}

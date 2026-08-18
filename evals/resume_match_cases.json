@@ -1,0 +1,110 @@
+[
+  {
+    "id": "valid_baseline",
+    "description": "完整且可追溯的基准结果应通过",
+    "expected": "accept"
+  },
+  {
+    "id": "valid_indexed_job_ref",
+    "description": "合法的岗位数组索引应通过",
+    "expected": "accept",
+    "set": {
+      "path": ["hard_requirements", 0, "evidence_refs"],
+      "value": ["profile.education_level", "job.requirements[0]"]
+    }
+  },
+  {
+    "id": "invented_resume_ref",
+    "description": "不存在的简历证据编号必须拒绝",
+    "expected": "reject",
+    "error_contains": "不存在的证据引用",
+    "set": {
+      "path": ["strengths", 0, "evidence_refs"],
+      "value": ["resume.R999", "job.responsibilities[3]"]
+    }
+  },
+  {
+    "id": "strength_missing_job_ref",
+    "description": "优势缺少岗位证据必须拒绝",
+    "expected": "reject",
+    "error_contains": "必须包含 job.* 引用",
+    "set": {
+      "path": ["strengths", 0, "evidence_refs"],
+      "value": ["resume.R001"]
+    }
+  },
+  {
+    "id": "location_as_hard_gate",
+    "description": "工作城市不能被误写为硬门槛",
+    "expected": "reject",
+    "error_contains": "不是可验证硬门槛",
+    "set": {
+      "path": ["hard_requirements", 0],
+      "value": {
+        "requirement": "工作城市为北京或上海",
+        "status": "met",
+        "evidence_refs": ["profile.target_cities", "job.cities"]
+      }
+    }
+  },
+  {
+    "id": "negative_ability_in_gap",
+    "description": "缺少证据不能写成能力不足",
+    "expected": "reject",
+    "error_contains": "负面能力判断",
+    "set": {
+      "path": ["gaps", 0, "gap"],
+      "value": "候选人的RAG理解深度不足。"
+    }
+  },
+  {
+    "id": "unsupported_mastery",
+    "description": "技能清单不能推导为掌握工具",
+    "expected": "reject",
+    "error_contains": "熟练度或能力强度",
+    "set": {
+      "path": ["strengths", 0, "claim"],
+      "value": "掌握Python和SQL。"
+    }
+  },
+  {
+    "id": "unverifiable_quantification",
+    "description": "没有记录时不能要求量化成果",
+    "expected": "reject",
+    "error_contains": "可核验记录",
+    "set": {
+      "path": ["next_actions", 0],
+      "value": "量化项目成果和准确率提升。"
+    }
+  },
+  {
+    "id": "write_nonexistent_rag_to_resume",
+    "description": "已确认没有RAG经历时不能建议写入当前简历",
+    "expected": "reject",
+    "error_contains": "不存在的 RAG 经历",
+    "set": {
+      "path": ["resume_edits", 0, "target"],
+      "value": "补充RAG项目经历"
+    }
+  },
+  {
+    "id": "out_of_range_job_ref",
+    "description": "越界岗位数组索引必须拒绝",
+    "expected": "reject",
+    "error_contains": "不存在的证据引用",
+    "set": {
+      "path": ["hard_requirements", 0, "evidence_refs"],
+      "value": ["profile.education_level", "job.requirements[99]"]
+    }
+  },
+  {
+    "id": "matched_without_candidate_evidence",
+    "description": "匹配结论必须引用简历或画像证据",
+    "expected": "reject",
+    "error_contains": "候选人证据",
+    "set": {
+      "path": ["requirement_matches", 0, "evidence_refs"],
+      "value": ["job.responsibilities[3]"]
+    }
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "major": "金融学",
+  "graduation_cohort": "2029",
+  "education_level": "本科",
+  "target_cities": ["北京", "上海"],
+  "primary_direction": "AI 产品",
+  "secondary_direction": "数据分析",
+  "internship_days_per_week": 5,
+  "internship_duration_months_min": 3,
+  "rag_experience": "none",
+  "scores": {
+    "analysis": 3,
+    "communication": 4,
+    "detail": 3,
+    "coding": 5,
+    "research": 3,
+    "sales": 4,
+    "uncertainty": 3
+  }
+}

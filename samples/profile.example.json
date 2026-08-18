@@ -1,0 +1,20 @@
+{
+  "major": "金融学",
+  "graduation_cohort": "2027",
+  "education_level": "本科",
+  "internship_days_per_week": 0,
+  "internship_duration_months_min": 0,
+  "rag_experience": "unknown",
+  "target_cities": ["青岛", "上海", "北京"],
+  "primary_direction": "金融科技产品 / 产品运营",
+  "secondary_direction": "商业分析 / 数据分析",
+  "scores": {
+    "analysis": 4,
+    "communication": 3,
+    "detail": 4,
+    "coding": 3,
+    "research": 4,
+    "sales": 2,
+    "uncertainty": 3
+  }
+}

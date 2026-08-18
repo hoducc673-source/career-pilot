@@ -1,0 +1,96 @@
+{
+  "case_count": 11,
+  "passed_count": 11,
+  "failed_count": 0,
+  "pass_rate": 1.0,
+  "results": [
+    {
+      "id": "valid_baseline",
+      "description": "完整且可追溯的基准结果应通过",
+      "expected": "accept",
+      "actual": "accept",
+      "passed": true,
+      "error": ""
+    },
+    {
+      "id": "valid_indexed_job_ref",
+      "description": "合法的岗位数组索引应通过",
+      "expected": "accept",
+      "actual": "accept",
+      "passed": true,
+      "error": ""
+    },
+    {
+      "id": "invented_resume_ref",
+      "description": "不存在的简历证据编号必须拒绝",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "strengths[0].evidence_refs 包含不存在的证据引用：['resume.R999']"
+    },
+    {
+      "id": "strength_missing_job_ref",
+      "description": "优势缺少岗位证据必须拒绝",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "strengths[0].evidence_refs 必须包含 job.* 引用"
+    },
+    {
+      "id": "location_as_hard_gate",
+      "description": "工作城市不能被误写为硬门槛",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "hard_requirements[0] 不是可验证硬门槛；必须引用学历、毕业时间或 job.requirements"
+    },
+    {
+      "id": "negative_ability_in_gap",
+      "description": "缺少证据不能写成能力不足",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "gaps[0].gap 把证据缺失写成了确定的负面能力判断"
+    },
+    {
+      "id": "unsupported_mastery",
+      "description": "技能清单不能推导为掌握工具",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "strengths[0].claim 使用了简历事实无法证明的熟练度或能力强度表述"
+    },
+    {
+      "id": "unverifiable_quantification",
+      "description": "没有记录时不能要求量化成果",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "next_actions[0] 建议量化时必须明确只使用可核验记录"
+    },
+    {
+      "id": "write_nonexistent_rag_to_resume",
+      "description": "已确认没有RAG经历时不能建议写入当前简历",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "resume_edits[0] 不能建议把已确认不存在的 RAG 经历写入当前简历"
+    },
+    {
+      "id": "out_of_range_job_ref",
+      "description": "越界岗位数组索引必须拒绝",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "hard_requirements[0].evidence_refs 包含不存在的证据引用：['job.requirements[99]']"
+    },
+    {
+      "id": "matched_without_candidate_evidence",
+      "description": "匹配结论必须引用简历或画像证据",
+      "expected": "reject",
+      "actual": "reject",
+      "passed": true,
+      "error": "requirement_matches[0].evidence_refs 必须包含 resume.* 或 profile.* 候选人证据"
+    }
+  ]
+}

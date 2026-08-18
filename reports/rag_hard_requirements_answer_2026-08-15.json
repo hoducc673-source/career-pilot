@@ -1,0 +1,34 @@
+{
+  "question": "哪些内容属于硬门槛？",
+  "retrieved_chunks": [
+    {
+      "chunk_id": "KC53A49E71E",
+      "source": "docs/JD_SCHEMA.md",
+      "heading": "JD 统一数据字段 v0.1 > 硬门槛判定规则",
+      "score": 7.630441
+    },
+    {
+      "chunk_id": "K923B2D2DFE",
+      "source": "docs/CAREERPILOT_PRD_V0.1.md",
+      "heading": "CareerPilot 产品需求文档（PRD v0.1） > 1. 用户问题",
+      "score": 6.033575
+    },
+    {
+      "chunk_id": "K83DD6D5E05",
+      "source": "docs/PROJECT_BRIEF.md",
+      "heading": "CareerPilot 项目需求说明 v0.1 > 2. 要解决的问题",
+      "score": 3.872016
+    },
+    {
+      "chunk_id": "KF73389557E",
+      "source": "docs/CAREERPILOT_PRD_V0.1.md",
+      "heading": "CareerPilot 产品需求文档（PRD v0.1） > 5. 功能需求与验收标准 > FR-4 人工确认",
+      "score": 3.099105
+    }
+  ],
+  "answer": "硬门槛是岗位明确规定、未满足时通常无法通过资格筛选的条件。本项目只把以下内容列为硬门槛：1. 最低学历，例如“本科及以上”或“硕士及以上”。2. 明确的毕业时间范围或毕业届别。3. 明确的每周到岗天数和最低连续实习时长。4. 岗位明确写明必须持有的证书或资格。“相关专业优先”“有相关经验优先”、一般能力要求和工作城市不是硬门槛。专业只有在岗位明确写成限制条件时，才能判断为硬门槛[KC53A49E71E]。",
+  "citations": [
+    "KC53A49E71E"
+  ],
+  "insufficient_evidence": false
+}

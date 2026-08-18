@@ -1,0 +1,28 @@
+{
+  "job_id": "alibaba-beijing-shanghai-pm-intern",
+  "model": "deepseek-v4-pro",
+  "thinking_mode": "disabled",
+  "decision": "stretch",
+  "confidence": "medium",
+  "summary": "候选人为金融学本科，2027届，符合教育背景和毕业时间要求；但当前画像未提供产品相关经历与技能证据，需要补充数据分析、产品工具和项目案例。",
+  "passed_structural_validation": true,
+  "strengths": [
+    "沟通自评较高",
+    "金融专业属于岗位列出的相邻专业方向",
+    "数字工具学习意愿较高"
+  ],
+  "evidence_gaps": [
+    "产品用户研究或PRD证据",
+    "SQL、Excel或Python分析作品",
+    "Axure或Figma原型作品",
+    "结果导向的真实行为案例"
+  ],
+  "semantic_bad_cases": [
+    "模型把相关专业优先项放入了 hard_requirements",
+    "模型把未提供证据写成了缺乏或不熟悉，语气过强"
+  ],
+  "prompt_fixes_applied": [
+    "hard_requirements 仅允许明确硬门槛",
+    "未提供证据不得改写为确定的能力缺失"
+  ]
+}
