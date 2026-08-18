@@ -4,7 +4,11 @@ from pathlib import Path
 
 from career_pilot.job_catalog import load_catalog
 from career_pilot.models import CareerProfile
-from career_pilot.resume_matcher import match_with_model, validate_match
+from career_pilot.resume_matcher import (
+    build_validated_hard_requirements,
+    match_with_model,
+    validate_match,
+)
 
 
 ROOT = Path(__file__).parents[1]
@@ -145,7 +149,7 @@ class ResumeMatcherTests(unittest.TestCase):
     def test_repairs_one_invalid_model_response(self):
         profile, job, resume, valid = fixtures()
         invalid = json.loads(json.dumps(valid, ensure_ascii=False))
-        invalid["hard_requirements"][0]["evidence_refs"] = ["profile.education_level"]
+        invalid["requirement_matches"][0]["evidence_refs"] = ["job.responsibilities"]
         client = SequenceClient([invalid, valid])
         actual = match_with_model(profile, job, resume, client)
         self.assertEqual(actual["decision"], "stretch")
@@ -155,13 +159,79 @@ class ResumeMatcherTests(unittest.TestCase):
     def test_allows_two_repair_attempts(self):
         profile, job, resume, valid = fixtures()
         invalid_one = json.loads(json.dumps(valid, ensure_ascii=False))
-        invalid_one["hard_requirements"][0]["evidence_refs"] = ["profile.education_level"]
+        invalid_one["strengths"][0]["evidence_refs"] = ["job.responsibilities"]
         invalid_two = json.loads(json.dumps(valid, ensure_ascii=False))
         invalid_two["requirement_matches"][0]["evidence_refs"] = ["job.responsibilities"]
         client = SequenceClient([invalid_one, invalid_two, valid])
         actual = match_with_model(profile, job, resume, client)
         self.assertEqual(actual["decision"], "stretch")
         self.assertEqual(client.calls, 3)
+
+    def test_program_classifies_haier_hard_gates_without_communication(self):
+        profile, _, resume, _ = fixtures()
+        job = next(
+            item
+            for item in load_catalog(ROOT / "data/jobs/seed_jobs.json")
+            if item["id"] == "haier-qingdao-platform-ops"
+        )
+        gates = build_validated_hard_requirements(profile, job, resume)
+        requirements = [item["requirement"] for item in gates]
+        self.assertEqual(requirements, ["2027届本科及以上", "英语四级"])
+        self.assertNotIn("良好沟通、逻辑和活动组织能力", requirements)
+        self.assertEqual(gates[0]["status"], "not_met")
+        self.assertEqual(gates[1]["status"], "unknown")
+
+    def test_certificate_is_met_only_with_direct_resume_evidence(self):
+        profile, _, resume, _ = fixtures()
+        job = next(
+            item
+            for item in load_catalog(ROOT / "data/jobs/seed_jobs.json")
+            if item["id"] == "haier-qingdao-platform-ops"
+        )
+        resume["evidence"].append(
+            {"evidence_id": "R003", "text": "大学英语四级（CET-4）", "kind": "resume_text"}
+        )
+        gates = build_validated_hard_requirements(profile, job, resume)
+        certificate = next(item for item in gates if item["requirement"] == "英语四级")
+        self.assertEqual(certificate["status"], "met")
+        self.assertIn("resume.R003", certificate["evidence_refs"])
+
+    def test_model_cannot_invent_communication_hard_gate(self):
+        profile, _, resume, result = fixtures()
+        job = next(
+            item
+            for item in load_catalog(ROOT / "data/jobs/seed_jobs.json")
+            if item["id"] == "haier-qingdao-platform-ops"
+        )
+        result["job_id"] = job["id"]
+        result["hard_requirements"] = [
+            {
+                "requirement": "良好沟通能力",
+                "status": "met",
+                "evidence_refs": ["job.requirements[2]", "profile.communication"],
+            }
+        ]
+        actual = match_with_model(profile, job, resume, FakeClient(result))
+        self.assertEqual(
+            [item["requirement"] for item in actual["hard_requirements"]],
+            ["2027届本科及以上", "英语四级"],
+        )
+        self.assertEqual(actual["decision"], "not_eligible_now")
+
+    def test_normalizes_model_requirement_status_alias(self):
+        profile, job, resume, result = fixtures()
+        result["requirement_matches"][0]["status"] = "met"
+        actual = match_with_model(profile, job, resume, FakeClient(result))
+        self.assertEqual(actual["requirement_matches"][0]["status"], "matched")
+
+    def test_model_proficiency_claim_is_rewritten_from_resume_evidence(self):
+        profile, job, resume, result = fixtures()
+        result["strengths"][0]["claim"] = "熟练使用模型评测工具。"
+        actual = match_with_model(profile, job, resume, FakeClient(result))
+        self.assertEqual(
+            actual["strengths"][0]["claim"],
+            "简历提供相关事实证据：参与模型输出评测",
+        )
 
     def test_rejects_location_as_a_hard_gate(self):
         profile, job, resume, result = fixtures()
