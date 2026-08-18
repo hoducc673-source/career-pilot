@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from html import escape
 from pathlib import Path
 from typing import Dict, List
@@ -8,6 +9,18 @@ from typing import Dict, List
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 
+from career_pilot.application_tracker import (
+    STATUS_LABELS,
+    STATUS_ORDER,
+    application_from_job,
+    applications_from_csv,
+    applications_to_csv,
+    create_application,
+    find_duplicate,
+    remove_application,
+    summarize_applications,
+    upsert_application,
+)
 from career_pilot.config import load_env_file
 from career_pilot.custom_jd import MAX_JD_CHARS, parse_custom_jd
 from career_pilot.deepseek_client import DeepSeekClient, DeepSeekError, DeepSeekSettings
@@ -140,6 +153,26 @@ def inject_theme() -> None:
           font-size: .78rem; letter-spacing: .06em;
         }
         .cp-jd-intake span { color: var(--muted); font-size: .84rem; }
+        .cp-pipeline {
+          display: grid; grid-template-columns: repeat(5, 1fr);
+          border: 1px solid var(--line); background: rgba(255,255,255,.84);
+          margin: .7rem 0 1rem;
+        }
+        .cp-pipeline-step { position: relative; padding: .85rem 1rem; border-right: 1px solid var(--line); }
+        .cp-pipeline-step:last-child { border-right: 0; }
+        .cp-pipeline-step:not(:last-child)::after {
+          content: "→"; position: absolute; right: -.48rem; top: 1.05rem; z-index: 2;
+          color: var(--signal); background: var(--fog); padding: 0 .14rem;
+        }
+        .cp-pipeline-count {
+          display: block; font-family: "Avenir Next", Avenir, sans-serif;
+          color: var(--signal); font-size: 1.45rem; font-weight: 700; line-height: 1;
+        }
+        .cp-pipeline-label { color: var(--ink); font-size: .82rem; margin-top: .34rem; }
+        .cp-deadline-alert {
+          border-left: 4px solid var(--signal); background: #FFF3EE;
+          color: #7A321C; padding: .7rem .9rem; margin: .55rem 0;
+        }
         div[data-testid="stMetric"] {
           background: rgba(255,255,255,.84); border: 1px solid var(--line); padding: .75rem;
         }
@@ -155,6 +188,9 @@ def inject_theme() -> None:
           .cp-jd-intake { grid-template-columns: 1fr; }
           .cp-jd-intake > div { border-right: 0; border-bottom: 1px solid var(--line); }
           .cp-jd-intake > div:last-child { border-bottom: 0; }
+          .cp-pipeline { grid-template-columns: 1fr 1fr; }
+          .cp-pipeline-step { border-bottom: 1px solid var(--line); }
+          .cp-pipeline-step::after { display: none; }
         }
         @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
         </style>
@@ -585,6 +621,222 @@ def render_match_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> N
         )
 
 
+def _tracker_records() -> List[Dict[str, str]]:
+    records = st.session_state.setdefault("applications", [])
+    if not isinstance(records, list):
+        st.session_state["applications"] = []
+        return []
+    return records
+
+
+def _set_tracker_records(records: List[Dict[str, str]], message: str) -> None:
+    st.session_state["applications"] = records
+    st.session_state["tracker_flash"] = message
+
+
+def _pipeline_html(summary: Dict[str, int]) -> str:
+    stages = ("saved", "preparing", "applied", "interview", "offer")
+    cells = "".join(
+        f'<div class="cp-pipeline-step"><span class="cp-pipeline-count">{summary[status]}</span>'
+        f'<div class="cp-pipeline-label">{STATUS_LABELS[status]}</div></div>'
+        for status in stages
+    )
+    return f'<div class="cp-pipeline" aria-label="求职进度管线">{cells}</div>'
+
+
+def render_tracker_tab(jobs: List[Dict[str, object]]) -> None:
+    st.subheader("投递管理看板")
+    st.markdown(
+        '<div class="cp-privacy"><strong>保存说明</strong>　投递记录只保留在当前网页会话；'
+        '请下载 CSV 长期保管，下次打开时再导入恢复。这一页不调用 DeepSeek。</div>',
+        unsafe_allow_html=True,
+    )
+    flash = st.session_state.pop("tracker_flash", None)
+    if flash:
+        st.success(str(flash))
+
+    records = _tracker_records()
+    summary = summarize_applications(records)
+    st.markdown(_pipeline_html(summary), unsafe_allow_html=True)
+    metric_columns = st.columns(4)
+    metric_columns[0].metric("当前记录", summary["total"])
+    metric_columns[1].metric("7 天内截止", summary["due_soon"])
+    metric_columns[2].metric("已过截止日", summary["overdue"])
+    metric_columns[3].metric("Offer", summary["offer"])
+    if summary["overdue"]:
+        st.markdown(
+            f'<div class="cp-deadline-alert">有 {summary["overdue"]} 条记录已过截止日；'
+            '请确认岗位是否关闭，并更新状态。</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("#### 新增岗位")
+    available_jobs = jobs_available_for_matching(jobs)
+    job_labels = {
+        f"{'本次 JD｜' if job['source_status'] == 'session_only' else ''}"
+        f"{job['company']}｜{job['title']}｜{'、'.join(job['cities'])}": job
+        for job in available_jobs
+    }
+    quick_left, quick_right = st.columns([3, 1])
+    with quick_left:
+        quick_label = st.selectbox("从岗位雷达快速添加", list(job_labels), key="tracker_quick_job")
+    with quick_right:
+        st.write("")
+        quick_add = st.button("加入看板", type="primary", use_container_width=True)
+    if quick_add:
+        candidate = application_from_job(job_labels[quick_label])
+        duplicate_id = find_duplicate(records, candidate)
+        if duplicate_id:
+            st.warning("这个岗位已在看板中，请直接更新原记录。")
+        else:
+            _set_tracker_records(upsert_application(records, candidate), "已将岗位加入收藏阶段。")
+            st.rerun()
+
+    with st.expander("手动新增其他岗位"):
+        with st.form("tracker_manual_add", clear_on_submit=True):
+            first, second = st.columns(2)
+            with first:
+                company = st.text_input("公司", key="tracker_new_company")
+                city = st.text_input("城市", key="tracker_new_city")
+                deadline_value = st.date_input("截止日期", value=None, key="tracker_new_deadline")
+            with second:
+                title = st.text_input("岗位", key="tracker_new_title")
+                source_url = st.text_input("岗位链接", placeholder="https://...", key="tracker_new_url")
+                resume_version = st.text_input("简历版本", placeholder="例如：数据分析-v2", key="tracker_new_resume")
+            next_action = st.text_input("下一步行动", value="核验截止日期并定制简历。", key="tracker_new_action")
+            notes = st.text_area("备注", height=90, key="tracker_new_notes")
+            manual_add = st.form_submit_button("添加到看板", type="primary", use_container_width=True)
+        if manual_add:
+            try:
+                candidate = create_application(
+                    company=company,
+                    title=title,
+                    city=city,
+                    deadline=deadline_value.isoformat() if isinstance(deadline_value, date) else "",
+                    next_action=next_action,
+                    resume_version=resume_version,
+                    source_url=source_url,
+                    notes=notes,
+                )
+                duplicate_id = find_duplicate(records, candidate)
+                if duplicate_id:
+                    st.warning("同一公司、岗位和城市的记录已存在。")
+                else:
+                    _set_tracker_records(upsert_application(records, candidate), "已添加手动投递记录。")
+                    st.rerun()
+            except ValueError as error:
+                st.error(f"无法添加：{error}")
+
+    with st.expander("下载备份 / 导入恢复"):
+        st.caption("导入会替换当前会话中的全部看板记录。")
+        export_col, import_col = st.columns(2)
+        with export_col:
+            st.download_button(
+                "下载投递看板 CSV",
+                applications_to_csv(records),
+                file_name="careerpilot-applications.csv",
+                mime="text/csv",
+                use_container_width=True,
+                disabled=not records,
+            )
+        with import_col:
+            uploaded_csv = st.file_uploader(
+                "选择 CareerPilot CSV",
+                type=["csv"],
+                key="tracker_csv_upload",
+                label_visibility="collapsed",
+            )
+            restore_clicked = st.button(
+                "用 CSV 恢复看板",
+                use_container_width=True,
+                disabled=uploaded_csv is None,
+            )
+        if restore_clicked and uploaded_csv is not None:
+            try:
+                restored = applications_from_csv(uploaded_csv.getvalue())
+                _set_tracker_records(restored, f"已从 CSV 恢复 {len(restored)} 条记录。")
+                st.rerun()
+            except ValueError as error:
+                st.error(f"CSV 导入失败：{error}")
+
+    st.divider()
+    st.markdown("#### 当前记录")
+    if not records:
+        st.info("还没有投递记录。先从岗位雷达加入一个岗位，然后写下唯一的下一步行动。")
+        return
+
+    selected_status = st.selectbox(
+        "按状态筛选",
+        ["全部", *STATUS_LABELS.values()],
+        key="tracker_status_filter",
+    )
+    allowed_statuses = (
+        set(STATUS_LABELS)
+        if selected_status == "全部"
+        else {status for status, label in STATUS_LABELS.items() if label == selected_status}
+    )
+    visible_records = [record for record in records if record["status"] in allowed_statuses]
+    visible_records.sort(key=lambda item: (not bool(item["deadline"]), item["deadline"] or "9999-12-31", item["created_at"]))
+    if not visible_records:
+        st.info("当前筛选条件下没有记录。")
+        return
+
+    status_options = list(STATUS_LABELS)
+    status_labels = [STATUS_LABELS[status] for status in status_options]
+    label_to_status = {label: status for status, label in STATUS_LABELS.items()}
+    for record in visible_records:
+        deadline_note = f" · 截止 {record['deadline']}" if record["deadline"] else ""
+        heading = f"{STATUS_LABELS[record['status']]} ｜ {record['company']} · {record['title']}{deadline_note}"
+        with st.expander(heading):
+            if record["source_url"]:
+                st.link_button("打开岗位来源", record["source_url"])
+            with st.form(f"tracker_edit_{record['id']}"):
+                edit_left, edit_right = st.columns(2)
+                with edit_left:
+                    status_label = st.selectbox(
+                        "当前状态",
+                        status_labels,
+                        index=status_options.index(record["status"]),
+                        key=f"tracker_status_{record['id']}",
+                    )
+                    deadline_current = date.fromisoformat(record["deadline"]) if record["deadline"] else None
+                    deadline_edit = st.date_input(
+                        "截止日期", value=deadline_current, key=f"tracker_deadline_{record['id']}"
+                    )
+                    resume_edit = st.text_input(
+                        "简历版本", value=record["resume_version"], key=f"tracker_resume_{record['id']}"
+                    )
+                with edit_right:
+                    action_edit = st.text_input(
+                        "下一步行动", value=record["next_action"], key=f"tracker_action_{record['id']}"
+                    )
+                    notes_edit = st.text_area(
+                        "备注", value=record["notes"], height=104, key=f"tracker_notes_{record['id']}"
+                    )
+                save_col, remove_col = st.columns([3, 1])
+                with save_col:
+                    save_clicked = st.form_submit_button("保存更新", type="primary", use_container_width=True)
+                with remove_col:
+                    remove_clicked = st.form_submit_button("移除记录", use_container_width=True)
+            if save_clicked:
+                updated = {
+                    **record,
+                    "status": label_to_status[status_label],
+                    "deadline": deadline_edit.isoformat() if isinstance(deadline_edit, date) else "",
+                    "next_action": action_edit,
+                    "resume_version": resume_edit,
+                    "notes": notes_edit,
+                }
+                try:
+                    _set_tracker_records(upsert_application(records, updated), "投递记录已更新。")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(f"无法更新：{error}")
+            if remove_clicked:
+                _set_tracker_records(remove_application(records, record["id"]), "已从本次会话移除记录。")
+                st.rerun()
+
+
 def render_rag_tab() -> None:
     st.subheader("知识库问答")
     st.caption("系统先检索公开项目文档，再让模型只依据命中原文回答。")
@@ -648,8 +900,8 @@ def main() -> None:
         st.stop()
 
     render_hero()
-    direction_tab, job_tab, match_tab, rag_tab = st.tabs(
-        ["方向探索", "岗位雷达", "简历匹配", "知识问答"]
+    direction_tab, job_tab, match_tab, tracker_tab, rag_tab = st.tabs(
+        ["方向探索", "岗位雷达", "简历匹配", "投递看板", "知识问答"]
     )
     with direction_tab:
         render_direction_tab(profile)
@@ -657,6 +909,8 @@ def main() -> None:
         render_job_tab(profile, jobs)
     with match_tab:
         render_match_tab(profile, jobs)
+    with tracker_tab:
+        render_tracker_tab(jobs)
     with rag_tab:
         render_rag_tab()
 
