@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from typing import Dict, List, Optional, Protocol, Set
 
 from .jd_analyzer import profile_to_dict
@@ -27,7 +28,8 @@ SYSTEM_PROMPT = """你是 CareerPilot 的简历—岗位证据匹配器。
 13. 建议补充数字时必须明确限定为“仅使用已有可核验记录”，不得暗示编造数据量、准确率或提升幅度。
 
 判断规则：
-- hard_requirements 只放明确硬门槛：学历、毕业时间、到岗天数/时长、强制证书。
+- 输入中的 validated_hard_requirements 已由程序核验。hard_requirements 必须逐项原样复制，
+  不得新增、删除、改写或重新判断；学历、毕业时间、到岗天数/时长、强制证书以该字段为准。
 - 工作城市是岗位属性，不得单独列为 hard_requirements。
 - “相关专业优先”“有经验优先”和一般能力要求不是硬门槛。
 - decision 只能是 likely_apply、stretch、not_eligible_now。
@@ -56,11 +58,225 @@ HARD_GATE_JOB_REFS = {
 
 UNSUPPORTED_NEGATIVE = re.compile(r"(?:能力|理解|经验|水平|基础).{0,4}(?:不足|较弱|欠缺)|不会|不具备")
 UNSUPPORTED_PROFICIENCY = re.compile(r"熟练|精通|擅长|掌握|能力较强")
+EDUCATION_RANK = {"专科": 1, "本科": 2, "硕士": 3, "博士": 4}
+REQUIREMENT_STATUS_ALIASES = {
+    "met": "matched",
+    "match": "matched",
+    "匹配": "matched",
+    "partially_met": "partial",
+    "partially_matched": "partial",
+    "部分匹配": "partial",
+    "not_met": "unknown",
+    "unmatched": "unknown",
+    "not_provided": "unknown",
+    "未提供": "unknown",
+    "未知": "unknown",
+}
+CERTIFICATE_PATTERN = re.compile(
+    r"英语\s*(?:四|六)级|CET[-\s]?[46]|(?:必须|须|需)(?:持有|具备|通过).{0,12}(?:证书|资格|认证)",
+    re.IGNORECASE,
+)
 
 
 class JsonModelClient(Protocol):
     def generate_json(self, system_prompt: str, user_prompt: str) -> Dict[str, object]:
         ...
+
+
+def _resume_refs_for_certificate(
+    requirement: str, resume_payload: Dict[str, object]
+) -> List[str]:
+    """Return direct resume evidence for a mandatory certificate, if supplied."""
+    requirement_upper = requirement.upper().replace(" ", "")
+    wants_cet6 = (
+        "六级" in requirement
+        or "CET-6" in requirement_upper
+        or "CET6" in requirement_upper
+    )
+    wants_cet4 = (
+        "四级" in requirement
+        or "CET-4" in requirement_upper
+        or "CET4" in requirement_upper
+    )
+    evidence = resume_payload.get("evidence", [])
+    if not isinstance(evidence, list):
+        return []
+    matches: List[str] = []
+    for item in evidence:
+        if not isinstance(item, dict) or not isinstance(item.get("evidence_id"), str):
+            continue
+        text = str(item.get("text", "")).upper().replace(" ", "")
+        has_cet6 = "六级" in text or "CET-6" in text or "CET6" in text
+        has_cet4 = "四级" in text or "CET-4" in text or "CET4" in text
+        if (wants_cet6 and has_cet6) or (
+            wants_cet4 and (has_cet4 or has_cet6)
+        ):
+            matches.append(f"resume.{item['evidence_id']}")
+    return matches
+
+
+def _education_status(requirement: str, profile: CareerProfile) -> Optional[str]:
+    required_level = next(
+        (level for level in ("博士", "硕士", "本科", "专科") if level in requirement),
+        None,
+    )
+    if required_level is None:
+        return None
+    # “本科三年级以上”描述的是年级，当前画像没有该字段，不能靠毕业年份反推。
+    if "年级" in requirement:
+        return "unknown"
+    actual_rank = EDUCATION_RANK.get(profile.education_level)
+    required_rank = EDUCATION_RANK[required_level]
+    if actual_rank is None:
+        return "unknown"
+    return "met" if actual_rank >= required_rank else "not_met"
+
+
+def _graduation_status(requirement: str, profile: CareerProfile) -> Optional[str]:
+    years = [int(value) for value in re.findall(r"20\d{2}", requirement)]
+    if not years:
+        return None
+    try:
+        candidate_year = int(profile.graduation_cohort)
+    except (TypeError, ValueError):
+        return "unknown"
+    if len(years) >= 2 and (
+        "至" in requirement or "到" in requirement or "-" in requirement
+    ):
+        return "met" if min(years) <= candidate_year <= max(years) else "not_met"
+    required_year = years[0]
+    if "以后" in requirement or "及以后" in requirement or "或以后" in requirement:
+        return "met" if candidate_year >= required_year else "not_met"
+    return "met" if candidate_year == required_year else "not_met"
+
+
+def _schedule_status(requirement: str, profile: CareerProfile) -> Optional[str]:
+    statuses: List[str] = []
+    day_match = re.search(r"每周\s*(?:至少)?\s*(\d)\s*天", requirement)
+    if day_match:
+        required_days = int(day_match.group(1))
+        if profile.internship_days_per_week <= 0:
+            statuses.append("unknown")
+        else:
+            statuses.append(
+                "met" if profile.internship_days_per_week >= required_days else "not_met"
+            )
+
+    duration_match = re.search(r"(?:至少\s*)?(\d+)\s*个月以上", requirement)
+    range_match = re.search(
+        r"(?:连续\s*)?(\d+)\s*(?:至|到|-)\s*(\d+)\s*个月", requirement
+    )
+    minimum_months = int(duration_match.group(1)) if duration_match else None
+    if range_match:
+        minimum_months = int(range_match.group(1))
+    if minimum_months is not None:
+        if profile.internship_duration_months_min <= 0:
+            statuses.append("unknown")
+        else:
+            statuses.append(
+                "met"
+                if profile.internship_duration_months_min >= minimum_months
+                else "not_met"
+            )
+    if not statuses:
+        return None
+    if "not_met" in statuses:
+        return "not_met"
+    if "unknown" in statuses:
+        return "unknown"
+    return "met"
+
+
+def build_validated_hard_requirements(
+    profile: CareerProfile,
+    job: Dict[str, object],
+    resume_payload: Dict[str, object],
+) -> List[Dict[str, object]]:
+    """Classify only objective hard gates before the model sees the prompt."""
+    requirements = job.get("requirements", [])
+    if not isinstance(requirements, list):
+        return []
+    hard_requirements: List[Dict[str, object]] = []
+    has_graduation_gate = False
+    for index, raw_requirement in enumerate(requirements):
+        if not isinstance(raw_requirement, str):
+            continue
+        requirement = raw_requirement.strip()
+        if not requirement or "优先" in requirement:
+            continue
+
+        education_status = _education_status(requirement, profile)
+        graduation_status = _graduation_status(requirement, profile)
+        schedule_status = _schedule_status(requirement, profile)
+        is_certificate = bool(CERTIFICATE_PATTERN.search(requirement))
+        is_hard_gate = any(
+            status is not None
+            for status in (education_status, graduation_status, schedule_status)
+        ) or is_certificate
+        if not is_hard_gate:
+            continue
+
+        refs = [f"job.requirements[{index}]"]
+        statuses = [
+            status
+            for status in (education_status, graduation_status, schedule_status)
+            if status is not None
+        ]
+        if education_status is not None:
+            refs.append("profile.education_level")
+        if graduation_status is not None:
+            refs.append("profile.graduation_cohort")
+            has_graduation_gate = True
+        if schedule_status is not None:
+            if re.search(r"每周.{0,8}\d\s*天", requirement):
+                refs.append("profile.internship_days_per_week")
+            if re.search(r"个月", requirement):
+                refs.append("profile.internship_duration_months_min")
+        if is_certificate:
+            certificate_refs = _resume_refs_for_certificate(requirement, resume_payload)
+            refs.extend(certificate_refs)
+            statuses.append("met" if certificate_refs else "unknown")
+
+        if "not_met" in statuses:
+            status = "not_met"
+        elif "unknown" in statuses:
+            status = "unknown"
+        else:
+            status = "met"
+        hard_requirements.append(
+            {"requirement": requirement, "status": status, "evidence_refs": refs}
+        )
+
+    cohort = str(job.get("graduation_cohort", "unspecified"))
+    if not has_graduation_gate and cohort not in {"", "unknown", "unspecified"}:
+        if cohort == "2026_or_later":
+            requirement = "2026届及以后毕业"
+        elif re.fullmatch(r"20\d{2}", cohort):
+            requirement = f"{cohort}届毕业"
+        else:
+            requirement = f"毕业时间：{cohort}"
+        status = _graduation_status(requirement, profile) or "unknown"
+        hard_requirements.append(
+            {
+                "requirement": requirement,
+                "status": status,
+                "evidence_refs": ["job.graduation_cohort", "profile.graduation_cohort"],
+            }
+        )
+    return hard_requirements
+
+
+def _normalize_requirement_statuses(raw: Dict[str, object]) -> None:
+    """Normalize harmless model enum aliases without changing evidence or claims."""
+    items = raw.get("requirement_matches")
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        status = item.get("status")
+        if isinstance(status, str) and status in REQUIREMENT_STATUS_ALIASES:
+            item["status"] = REQUIREMENT_STATUS_ALIASES[status]
 
 
 def build_match_prompt(
@@ -80,6 +296,9 @@ def build_match_prompt(
         "profile": profile_to_dict(profile),
         "job": job,
         "resume_evidence": prompt_evidence,
+        "validated_hard_requirements": build_validated_hard_requirements(
+            profile, job, resume_payload
+        ),
     }
     return "请完成简历与岗位的证据匹配，并返回规定 JSON：\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
@@ -271,10 +490,18 @@ def match_with_model(
     client: JsonModelClient,
 ) -> Dict[str, object]:
     base_prompt = build_match_prompt(profile, job, resume_payload)
+    validated_hard_requirements = build_validated_hard_requirements(
+        profile, job, resume_payload
+    )
     current_prompt = base_prompt
     last_error: Optional[ValueError] = None
     for attempt in range(3):
-        raw = client.generate_json(SYSTEM_PROMPT, current_prompt)
+        raw = deepcopy(client.generate_json(SYSTEM_PROMPT, current_prompt))
+        # Hard gates are objective program output, not a language-model classification task.
+        raw["hard_requirements"] = deepcopy(validated_hard_requirements)
+        _normalize_requirement_statuses(raw)
+        if any(item["status"] == "not_met" for item in validated_hard_requirements):
+            raw["decision"] = "not_eligible_now"
         try:
             return validate_match(raw, profile, job, resume_payload)
         except ValueError as error:

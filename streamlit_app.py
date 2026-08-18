@@ -69,8 +69,10 @@ def inject_theme() -> None:
         .block-container { max-width: 1180px; padding-top: 2rem; padding-bottom: 4rem; }
         h1, h2, h3 { color: var(--ink); letter-spacing: -.025em; }
         h1, h2 { font-family: "Songti SC", "STSong", serif; }
-        code, .cp-kicker, .cp-route-label, .cp-stat-label {
-          font-family: "SFMono-Regular", Menlo, monospace;
+        code { font-family: "SFMono-Regular", Menlo, monospace; }
+        .cp-kicker, .cp-route-label, .cp-stat-label {
+          font-family: "Avenir Next", Avenir, "Helvetica Neue", Arial, sans-serif;
+          font-weight: 650;
         }
         .cp-hero {
           border-top: 5px solid var(--signal);
@@ -342,8 +344,14 @@ def render_match_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> N
             st.session_state["latest_match_report"] = report
             st.session_state["latest_match_summary"] = match
             st.session_state["latest_match_job_id"] = str(job["id"])
-        except (DeepSeekError, ValueError) as error:
-            st.error(f"生成失败：{error}")
+        except DeepSeekError as error:
+            st.error("DeepSeek 服务调用失败，请检查网络、API Key 或账户余额后重试。")
+            with st.expander("查看技术详情"):
+                st.code(str(error))
+        except ValueError as error:
+            st.error("模型已经响应，但回答未通过证据校验；本次没有生成或保存不可靠报告。")
+            with st.expander("查看技术详情"):
+                st.code(str(error))
 
     if not model_is_configured():
         st.info("尚未配置 DeepSeek API Key；可先体验其他三个离线功能。")
