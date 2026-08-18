@@ -33,7 +33,7 @@
     "id": "current_stage",
     "question": "当前项目处于哪个阶段？",
     "expected_top_source": "docs/ROADMAP.md",
-    "expected_text_contains": "评测与安全"
+    "expected_text_contains": "真实反馈与迭代"
   },
   {
     "id": "no_admission_probability",

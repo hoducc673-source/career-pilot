@@ -44,6 +44,13 @@
 
 题包不会代写可直接背诵的第一人称答案。每个主问题必须同时引用岗位要求和真实简历证据；引用不存在或输出代写答案时，程序会拒绝该结果。
 
+## 作品集入口
+
+- [项目一页纸、系统架构与简历描述](docs/PORTFOLIO.md)
+- [3 分钟在线演示脚本](docs/DEMO_SCRIPT.md)
+- [面试讲解提纲与高频追问](docs/INTERVIEW_GUIDE.md)
+- [Streamlit 部署与费用保护](docs/STREAMLIT_DEPLOYMENT.md)
+
 ## 第一次运行
 
 ### 网页版（推荐）
@@ -149,10 +156,10 @@ PYTHONPATH=src python3 -m career_pilot.rag_eval_cli \
 
 ## 下一步
 
-1. 将网页分支合并到 `main`
-2. 按[部署清单](docs/STREAMLIT_DEPLOYMENT.md)在 Streamlit Community Cloud 配置托管密钥
-3. 部署一个招聘者可直接打开的公开演示版本
-4. 增加用户反馈和失败案例，继续扩充评测集
+1. 使用真实但脱敏的求职场景收集失败案例
+2. 扩充简历匹配、面试准备和 RAG 评测集
+3. 对比现有关键词检索与混合检索，先证明效果提升再增加复杂度
+4. 在具备身份与权限设计后，再考虑云端持久化投递记录
 
 详细需求见 `docs/PROJECT_BRIEF.md`，路线见 `docs/ROADMAP.md`。
 
