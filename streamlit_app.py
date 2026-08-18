@@ -409,6 +409,9 @@ def render_match_tab(profile: CareerProfile, jobs: List[Dict[str, object]]) -> N
             st.session_state["latest_match_report"] = report
             st.session_state["latest_match_summary"] = match
             st.session_state["latest_match_job_id"] = str(job["id"])
+            # Re-run once so the sidebar immediately reflects every model call,
+            # including any automatic validation-repair attempts.
+            st.rerun()
         except UsageLimitError as error:
             st.warning(str(error))
         except DeepSeekError as error:
@@ -466,6 +469,9 @@ def render_rag_tab() -> None:
                 else:
                     with st.spinner("正在依据检索原文生成带引用答案……"):
                         st.session_state["rag_answer"] = answer_with_model(question, results, get_client())
+                    # The generated answer is already in session state, so a
+                    # re-run refreshes the remaining-request caption safely.
+                    st.rerun()
         except UsageLimitError as error:
             st.warning(str(error))
         except (OSError, UnicodeError, ValueError, DeepSeekError) as error:
