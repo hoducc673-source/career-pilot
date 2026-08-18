@@ -119,9 +119,9 @@ PYTHONPATH=src python3 -m career_pilot.rag_eval_cli \
 
 ## 下一步
 
-1. 完成网页端人工体验验收
-2. 为公开部署配置托管平台密钥，不把 `.env` 上传到 GitHub
-3. 部署一个招聘者可直接打开的只读演示版本
+1. 将网页分支合并到 `main`
+2. 按[部署清单](docs/STREAMLIT_DEPLOYMENT.md)在 Streamlit Community Cloud 配置托管密钥
+3. 部署一个招聘者可直接打开的公开演示版本
 4. 增加用户反馈和失败案例，继续扩充评测集
 
 详细需求见 `docs/PROJECT_BRIEF.md`，路线见 `docs/ROADMAP.md`。
